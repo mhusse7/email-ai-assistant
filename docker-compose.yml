@@ -1,0 +1,93 @@
+# Docker Compose for Email AI Assistant
+# For local development and testing
+# In Coolify, you'll configure each service separately
+
+version: '3.8'
+
+services:
+  app:
+    build: .
+    container_name: email-ai-assistant
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      # Email Configuration
+      - IMAP_HOST=${IMAP_HOST:-imap.mail.me.com}
+      - IMAP_PORT=${IMAP_PORT:-993}
+      - IMAP_USER=${IMAP_USER}
+      - IMAP_PASSWORD=${IMAP_PASSWORD}
+      - SMTP_HOST=${SMTP_HOST:-smtp.mail.me.com}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      # Whitelist
+      - ALLOWED_SENDERS=${ALLOWED_SENDERS}
+      # APIs
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - SERPAPI_KEY=${SERPAPI_KEY}
+      # PostgreSQL
+      - POSTGRES_HOST=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_DB=${POSTGRES_DB:-email_assistant}
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      # Qdrant
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - QDRANT_COLLECTION=${QDRANT_COLLECTION:-email_conversations}
+      # App Settings
+      - POLLING_INTERVAL_SECONDS=${POLLING_INTERVAL_SECONDS:-30}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - ERROR_NOTIFICATION_EMAIL=${ERROR_NOTIFICATION_EMAIL}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    networks:
+      - email-assistant-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: email-assistant-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-email_assistant}
+      - POSTGRES_USER=${POSTGRES_USER:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - email-assistant-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-email_assistant}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: email-assistant-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    networks:
+      - email-assistant-network
+
+volumes:
+  postgres_data:
+  qdrant_data:
+
+networks:
+  email-assistant-network:
+    driver: bridge

@@ -1,0 +1,44 @@
+# Docker Compose for Coolify Deployment
+# Use this if you want to deploy the full stack via Coolify's docker-compose feature
+# If you already have Postgres and Qdrant on Coolify, use the standalone Dockerfile instead
+
+version: '3.8'
+
+services:
+  email-ai-assistant:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      # These will be set via Coolify's environment variables
+      - IMAP_HOST
+      - IMAP_PORT
+      - IMAP_USER
+      - IMAP_PASSWORD
+      - SMTP_HOST
+      - SMTP_PORT
+      - SMTP_USER
+      - SMTP_PASSWORD
+      - ALLOWED_SENDERS
+      - GEMINI_API_KEY
+      - SERPAPI_KEY
+      - POSTGRES_HOST
+      - POSTGRES_PORT
+      - POSTGRES_DB
+      - POSTGRES_USER
+      - POSTGRES_PASSWORD
+      - QDRANT_HOST
+      - QDRANT_PORT
+      - QDRANT_COLLECTION
+      - POLLING_INTERVAL_SECONDS
+      - LOG_LEVEL
+      - ERROR_NOTIFICATION_EMAIL
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    labels:
+      - "coolify.managed=true"
