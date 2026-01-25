@@ -26,11 +26,12 @@ class VectorService:
         # Initialize Gemini for embeddings
         genai.configure(api_key=self.settings.gemini_api_key)
 
-        # Initialize Qdrant client with API key authentication
+        # Initialize Qdrant client with API key authentication (HTTP, not HTTPS)
         self.client = QdrantClient(
             host=self.settings.qdrant_host,
             port=self.settings.qdrant_port,
             api_key=self.settings.qdrant_api_key if self.settings.qdrant_api_key else None,
+            https=False,  # Use HTTP since Qdrant is not configured with SSL
         )
 
         # Ensure collection exists
