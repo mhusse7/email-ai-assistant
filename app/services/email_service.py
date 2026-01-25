@@ -47,12 +47,28 @@ class EmailService:
                 if not message_ids:
                     return emails
 
-                # Fetch messages
-                messages = client.fetch(message_ids, ["RFC822", "FLAGS"])
+                # Fetch messages - use BODY.PEEK[] to avoid marking as read prematurely
+                messages = client.fetch(message_ids, ["BODY.PEEK[]", "FLAGS"])
 
                 for msg_id, data in messages.items():
                     try:
-                        raw_email = data[b"RFC822"]
+                        # Handle different key formats from IMAPClient
+                        raw_email = (
+                            data.get(b"BODY[]") or
+                            data.get(b"RFC822") or
+                            data.get("BODY[]") or
+                            data.get("RFC822")
+                        )
+                        if raw_email is None:
+                            # Try to find any key that contains the email body
+                            for key in data.keys():
+                                key_str = str(key)
+                                if b"BODY" in key if isinstance(key, bytes) else "BODY" in key:
+                                    raw_email = data[key]
+                                    break
+                        if raw_email is None:
+                            logger.warning("no_email_body", msg_id=msg_id, keys=[str(k) for k in data.keys()])
+                            continue
                         parsed = email.message_from_bytes(raw_email)
 
                         email_msg = self._parse_email(parsed, msg_id)

@@ -114,9 +114,9 @@ class AIService:
             )
         ]
 
-        # Initialize model
+        # Initialize model (use gemini-2.0-flash or gemini-1.5-pro)
         self.model = genai.GenerativeModel(
-            model_name="gemini-1.5-flash",
+            model_name="gemini-2.0-flash",
             tools=self.tools,
             system_instruction=SYSTEM_PROMPT,
         )
