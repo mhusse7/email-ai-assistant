@@ -1,7 +1,7 @@
 """AI Agent service using Google Gemini."""
 
 import google.generativeai as genai
-from typing import Optional
+from typing import Optional, Union
 
 from app.config import get_settings
 from app.models.email import EmailMessage
@@ -24,6 +24,7 @@ SYSTEM_PROMPT = """You are Moe's highly capable personal AI assistant responding
 2. Search the web for current information (news, weather, prices, sports, events)
 3. Remember past conversations with this user
 4. Search past email conversations for relevant context
+5. Analyze images and screenshots sent via email
 
 ## Response Guidelines
 - START with the direct answer - no preamble like "Great question!" or "Sure, I'd be happy to help"
@@ -36,6 +37,12 @@ SYSTEM_PROMPT = """You are Moe's highly capable personal AI assistant responding
 - Web Search: Current events, weather, prices, news, sports scores, stock prices, anything time-sensitive
 - Past Conversations: When user references previous discussions or you need context
 - Always search rather than guess for factual, time-sensitive information
+
+## Image Analysis
+- When images are attached, analyze them thoroughly
+- Describe what you see, extract text (OCR), identify objects, explain diagrams
+- If the user asks a question about the image, focus your answer on that
+- If no specific question, provide a helpful summary of the image content
 
 ## Formatting Rules (IMPORTANT)
 - Write in plain text suitable for email
@@ -139,16 +146,33 @@ class AIService:
             # Get conversation history from PostgreSQL
             history = self.memory_service.get_conversation_history(session_id, limit=5)
 
-            # Build context
-            context_parts = []
-
-            # Add email context
-            context_parts.append(
+            # Build text context
+            text_context = (
                 f"Current Email:\n"
                 f"From: {email_msg.sender_email}\n"
                 f"Subject: {email_msg.subject}\n\n"
                 f"Message:\n{email_msg.body}"
             )
+
+            # Build multimodal content (text + images)
+            content_parts = [text_context]
+
+            # Add image attachments if present
+            if email_msg.attachments:
+                content_parts.append(
+                    f"\n\n[{len(email_msg.attachments)} image(s) attached - please analyze]"
+                )
+                for attachment in email_msg.attachments:
+                    # Add image as inline data for Gemini
+                    content_parts.append({
+                        "mime_type": attachment.content_type,
+                        "data": attachment.data,
+                    })
+                    logger.info(
+                        "adding_image_to_context",
+                        filename=attachment.filename,
+                        content_type=attachment.content_type,
+                    )
 
             # Create chat session with history
             chat_history = []
@@ -159,12 +183,16 @@ class AIService:
             chat = self.model.start_chat(history=chat_history)
 
             # Send message and handle function calls
-            response = await self._send_with_tools(chat, "\n\n".join(context_parts), session_id)
+            response = await self._send_with_tools(chat, content_parts, session_id)
 
-            # Store conversation in memory
+            # Store conversation in memory (text only)
+            user_message = email_msg.body
+            if email_msg.attachments:
+                user_message += f" [+{len(email_msg.attachments)} image(s)]"
+
             self.memory_service.add_conversation(
                 session_id=session_id,
-                user_message=email_msg.body,
+                user_message=user_message,
                 assistant_message=response,
             )
 
@@ -172,6 +200,7 @@ class AIService:
                 "email_processed",
                 sender=email_msg.sender_email,
                 response_length=len(response),
+                image_count=len(email_msg.attachments),
             )
 
             return response
@@ -183,7 +212,7 @@ class AIService:
     async def _send_with_tools(
         self,
         chat,
-        message: str,
+        message: Union[str, list],
         session_id: str,
         max_iterations: int = 5,
     ) -> str:
@@ -192,7 +221,7 @@ class AIService:
 
         Args:
             chat: The chat session
-            message: User message
+            message: User message (string or list of parts for multimodal)
             session_id: Session ID for context
             max_iterations: Maximum tool call iterations
 

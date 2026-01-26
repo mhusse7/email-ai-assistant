@@ -5,6 +5,18 @@ from pydantic import BaseModel, Field
 from typing import Optional
 
 
+class EmailAttachment(BaseModel):
+    """Represents an email attachment."""
+
+    filename: str
+    content_type: str  # e.g., "image/png", "image/jpeg"
+    data: bytes  # Raw binary data
+
+    class Config:
+        # Allow arbitrary types for bytes
+        arbitrary_types_allowed = True
+
+
 class EmailMessage(BaseModel):
     """Represents a sanitized email message."""
 
@@ -15,9 +27,11 @@ class EmailMessage(BaseModel):
     received_at: datetime = Field(default_factory=datetime.utcnow)
     in_reply_to: Optional[str] = None
     references: Optional[str] = None
+    attachments: list[EmailAttachment] = Field(default_factory=list)
 
     class Config:
         json_encoders = {datetime: lambda v: v.isoformat()}
+        arbitrary_types_allowed = True
 
 
 class EmailConversation(BaseModel):

@@ -14,10 +14,24 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 import html2text
 
 from app.config import get_settings
-from app.models.email import EmailMessage
+from app.models.email import EmailMessage, EmailAttachment
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+# Supported image MIME types
+SUPPORTED_IMAGE_TYPES = {
+    "image/png",
+    "image/jpeg",
+    "image/jpg",
+    "image/gif",
+    "image/webp",
+    "image/heic",
+    "image/heif",
+}
+
+# Max image size (10MB)
+MAX_IMAGE_SIZE = 10 * 1024 * 1024
 
 
 class EmailService:
@@ -108,12 +122,20 @@ class EmailService:
 
             # Get body
             body = self._extract_body(msg)
-            if not body or len(body.strip()) < 2:
+
+            # Extract image attachments
+            attachments = self._extract_image_attachments(msg)
+
+            # Allow emails with just images (no text body required if images present)
+            if (not body or len(body.strip()) < 2) and not attachments:
                 logger.debug("empty_email_body", sender=sender_email)
                 return None
 
-            # Clean the body
-            body = self._clean_body(body)
+            # Clean the body (or set default if only images)
+            if body:
+                body = self._clean_body(body)
+            else:
+                body = "[Image attachment(s) - please analyze]"
 
             return EmailMessage(
                 message_id=message_id,
@@ -122,11 +144,59 @@ class EmailService:
                 body=body,
                 in_reply_to=in_reply_to,
                 references=references,
+                attachments=attachments,
             )
 
         except Exception as e:
             logger.error("email_parse_error", error=str(e))
             return None
+
+    def _extract_image_attachments(self, msg: email.message.Message) -> list[EmailAttachment]:
+        """Extract image attachments from email."""
+        attachments = []
+
+        if not msg.is_multipart():
+            return attachments
+
+        for part in msg.walk():
+            content_type = part.get_content_type()
+
+            # Check if it's a supported image type
+            if content_type not in SUPPORTED_IMAGE_TYPES:
+                continue
+
+            # Get filename
+            filename = part.get_filename()
+            if not filename:
+                # Generate a filename if none provided
+                ext = content_type.split("/")[-1]
+                filename = f"image.{ext}"
+
+            # Get the image data
+            payload = part.get_payload(decode=True)
+            if not payload:
+                continue
+
+            # Check size limit
+            if len(payload) > MAX_IMAGE_SIZE:
+                logger.warning(
+                    "image_too_large",
+                    filename=filename,
+                    size=len(payload),
+                    max_size=MAX_IMAGE_SIZE,
+                )
+                continue
+
+            attachments.append(
+                EmailAttachment(
+                    filename=filename,
+                    content_type=content_type,
+                    data=payload,
+                )
+            )
+            logger.info("image_attachment_extracted", filename=filename, size=len(payload))
+
+        return attachments
 
     def _extract_body(self, msg: email.message.Message) -> str:
         """Extract text body from email message."""
