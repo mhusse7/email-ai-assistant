@@ -25,7 +25,6 @@ class EmailService:
 
     def __init__(self):
         self.settings = get_settings()
-        self.processed_ids: set[str] = set()  # Track processed message IDs
         self.h2t = html2text.HTML2Text()
         self.h2t.ignore_links = True
         self.h2t.ignore_images = True
@@ -182,7 +181,7 @@ class EmailService:
         return body
 
     def _should_process(self, email_msg: EmailMessage) -> bool:
-        """Check if email should be processed."""
+        """Check if email should be processed (basic checks only)."""
         # Skip own emails (prevent loops)
         if self.settings.imap_user.lower() in email_msg.sender_email:
             logger.debug("skipping_own_email", sender=email_msg.sender_email)
@@ -194,19 +193,12 @@ class EmailService:
             logger.info("sender_not_whitelisted", sender=email_msg.sender_email)
             return False
 
-        # Check if already processed (deduplication)
-        msg_hash = hashlib.md5(email_msg.message_id.encode()).hexdigest()
-        if msg_hash in self.processed_ids:
-            logger.debug("already_processed", message_id=email_msg.message_id)
-            return False
-
-        self.processed_ids.add(msg_hash)
-
-        # Limit cache size
-        if len(self.processed_ids) > 10000:
-            self.processed_ids = set(list(self.processed_ids)[-5000:])
-
         return True
+
+    @staticmethod
+    def get_message_hash(message_id: str) -> str:
+        """Generate a hash for deduplication."""
+        return hashlib.md5(message_id.encode()).hexdigest()
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
     def send_reply(

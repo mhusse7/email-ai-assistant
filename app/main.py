@@ -3,11 +3,13 @@
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime
+from typing import Optional
 
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.responses import JSONResponse
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from imapclient import IMAPClient
 
 from app.config import get_settings
 from app.models.email import EmailMessage, EmailConversation
@@ -36,6 +38,8 @@ processing_lock = asyncio.Lock()
 
 async def process_single_email(email_msg: EmailMessage) -> None:
     """Process a single email message."""
+    response: Optional[str] = None
+
     try:
         logger.info(
             "processing_email",
@@ -46,14 +50,31 @@ async def process_single_email(email_msg: EmailMessage) -> None:
         # Generate AI response
         response = await ai_service.process_email(email_msg)
 
-        # Send reply
-        email_service.send_reply(
-            to_email=email_msg.sender_email,
-            subject=email_msg.subject,
-            body=response,
-            in_reply_to=email_msg.message_id,
-            references=email_msg.references,
-        )
+        # Try to send reply
+        try:
+            email_service.send_reply(
+                to_email=email_msg.sender_email,
+                subject=email_msg.subject,
+                body=response,
+                in_reply_to=email_msg.message_id,
+                references=email_msg.references,
+            )
+        except Exception as send_error:
+            # Queue for retry if send fails
+            logger.error(
+                "send_failed_queuing_retry",
+                to_email=email_msg.sender_email,
+                error=str(send_error),
+            )
+            memory_service.queue_failed_email(
+                to_email=email_msg.sender_email,
+                subject=email_msg.subject,
+                body=response,
+                error_message=str(send_error),
+                in_reply_to=email_msg.message_id,
+                references=email_msg.references,
+            )
+            # Still store to vector store since we generated a response
 
         # Store conversation in vector store
         conversation = EmailConversation(
@@ -64,6 +85,14 @@ async def process_single_email(email_msg: EmailMessage) -> None:
             message_id=email_msg.message_id,
         )
         vector_service.store_conversation(conversation)
+
+        # Mark as processed in database
+        msg_hash = EmailService.get_message_hash(email_msg.message_id)
+        memory_service.mark_email_processed(
+            message_hash=msg_hash,
+            message_id=email_msg.message_id,
+            sender_email=email_msg.sender_email,
+        )
 
         logger.info(
             "email_processed_successfully",
@@ -103,12 +132,60 @@ async def poll_emails() -> None:
 
             logger.info("found_new_emails", count=len(emails))
 
-            # Process each email
+            # Process each email (with deduplication check)
             for email_msg in emails:
+                # Check if already processed (persistent deduplication)
+                msg_hash = EmailService.get_message_hash(email_msg.message_id)
+                if memory_service.is_email_processed(msg_hash):
+                    logger.debug(
+                        "skipping_already_processed",
+                        message_id=email_msg.message_id,
+                    )
+                    continue
+
                 await process_single_email(email_msg)
 
         except Exception as e:
             logger.error("polling_error", error=str(e))
+
+
+async def retry_failed_emails() -> None:
+    """Retry sending failed emails."""
+    try:
+        failed_emails = memory_service.get_failed_emails(max_retries=5, limit=5)
+
+        if not failed_emails:
+            return
+
+        logger.info("retrying_failed_emails", count=len(failed_emails))
+
+        for failed in failed_emails:
+            try:
+                email_service.send_reply(
+                    to_email=failed["to_email"],
+                    subject=failed["subject"],
+                    body=failed["body"],
+                    in_reply_to=failed["in_reply_to"],
+                    references=failed["references"],
+                )
+                memory_service.mark_email_retry_attempted(failed["id"], success=True)
+                logger.info("retry_success", to_email=failed["to_email"])
+
+            except Exception as e:
+                memory_service.mark_email_retry_attempted(
+                    failed["id"],
+                    success=False,
+                    error=str(e)
+                )
+                logger.warning(
+                    "retry_failed",
+                    to_email=failed["to_email"],
+                    retry_count=failed["retry_count"] + 1,
+                    error=str(e),
+                )
+
+    except Exception as e:
+        logger.error("retry_job_error", error=str(e))
 
 
 @asynccontextmanager
@@ -139,6 +216,16 @@ async def lifespan(app: FastAPI):
         name="Poll for new emails",
         replace_existing=True,
     )
+
+    # Add retry job for failed emails (every 5 minutes)
+    scheduler.add_job(
+        retry_failed_emails,
+        trigger=IntervalTrigger(minutes=5),
+        id="retry_failed_emails",
+        name="Retry failed email sends",
+        replace_existing=True,
+    )
+
     scheduler.start()
 
     logger.info(
@@ -173,13 +260,26 @@ async def root():
     }
 
 
+def check_imap_connection() -> bool:
+    """Check IMAP server connectivity."""
+    try:
+        settings = get_settings()
+        with IMAPClient(settings.imap_host, port=settings.imap_port, ssl=True, timeout=5) as client:
+            client.login(settings.imap_user, settings.imap_password)
+            client.logout()
+        return True
+    except Exception as e:
+        logger.warning("imap_health_check_failed", error=str(e))
+        return False
+
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint for Coolify."""
     try:
         settings = get_settings()
 
-        # Check services
+        # Basic service checks
         checks = {
             "email_service": email_service is not None,
             "ai_service": ai_service is not None,
@@ -209,16 +309,64 @@ async def health_check():
         )
 
 
+@app.get("/health/deep")
+async def deep_health_check():
+    """Deep health check that verifies all external dependencies."""
+    try:
+        settings = get_settings()
+        loop = asyncio.get_event_loop()
+
+        # Check PostgreSQL
+        postgres_ok = memory_service.check_connection() if memory_service else False
+
+        # Check Qdrant
+        qdrant_ok = vector_service.check_connection() if vector_service else False
+
+        # Check IMAP (in thread pool since it's sync)
+        imap_ok = await loop.run_in_executor(None, check_imap_connection)
+
+        checks = {
+            "postgres": postgres_ok,
+            "qdrant": qdrant_ok,
+            "imap": imap_ok,
+            "scheduler_running": scheduler is not None and scheduler.running,
+        }
+
+        failed_emails = memory_service.get_failed_email_count() if memory_service else 0
+
+        all_healthy = all(checks.values())
+
+        response_data = {
+            "status": "healthy" if all_healthy else "degraded",
+            "checks": checks,
+            "failed_email_queue": failed_emails,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+
+        if not all_healthy:
+            return JSONResponse(status_code=503, content=response_data)
+
+        return response_data
+
+    except Exception as e:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "error", "error": str(e)},
+        )
+
+
 @app.get("/stats")
 async def get_stats():
     """Get application statistics."""
     try:
         vector_stats = vector_service.get_collection_stats() if vector_service else {}
         session_count = memory_service.get_session_count() if memory_service else 0
+        failed_email_count = memory_service.get_failed_email_count() if memory_service else 0
 
         return {
             "vector_store": vector_stats,
             "memory_sessions": session_count,
+            "failed_email_queue": failed_email_count,
             "scheduler_running": scheduler.running if scheduler else False,
             "timestamp": datetime.utcnow().isoformat(),
         }

@@ -212,3 +212,12 @@ class VectorService:
         except Exception as e:
             logger.error("stats_error", error=str(e))
             return {}
+
+    def check_connection(self) -> bool:
+        """Check if Qdrant connection is healthy."""
+        try:
+            collections = self.client.get_collections()
+            return True
+        except Exception as e:
+            logger.error("qdrant_health_check_error", error=str(e))
+            return False
