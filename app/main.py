@@ -109,6 +109,7 @@ async def process_single_email(email_msg: EmailMessage) -> None:
         email_service.send_error_notification(
             error=str(e),
             context={
+                "step": "email_processing_pipeline",
                 "sender": email_msg.sender_email,
                 "subject": email_msg.subject,
                 "message_id": email_msg.message_id,
@@ -122,9 +123,16 @@ async def poll_emails() -> None:
         try:
             logger.debug("polling_emails")
 
-            # Fetch new emails (runs in thread pool since IMAP is sync)
+            # Fetch new emails (runs in thread pool since IMAP is sync, wrapped with hard timeout)
             loop = asyncio.get_event_loop()
-            emails = await loop.run_in_executor(None, email_service.fetch_new_emails)
+            try:
+                emails = await asyncio.wait_for(
+                    loop.run_in_executor(None, email_service.fetch_new_emails),
+                    timeout=120.0
+                )
+            except asyncio.TimeoutError:
+                logger.error("imap_polling_timeout", error="IMAP sync execution exceeded 120s timeout")
+                return
 
             if not emails:
                 logger.debug("no_new_emails")
@@ -188,6 +196,24 @@ async def retry_failed_emails() -> None:
         logger.error("retry_job_error", error=str(e))
 
 
+async def cleanup_vector_store() -> None:
+    """Run weekly cleanup of old vector store points."""
+    try:
+        logger.info("running_vector_store_cleanup")
+        if vector_service:
+            # Delete points older than 90 days
+            from datetime import datetime, timedelta
+            cutoff_date = (datetime.utcnow() - timedelta(days=90)).isoformat()
+            
+            # This logic assumes the Qdrant service has an implemented cleanup function.
+            # If not implemented, we would call a cleanup method here.
+            # We'll rely on a placeholder implementation or add it to VectorService
+            success = vector_service.cleanup_old_vectors(cutoff_date)
+            logger.info("vector_store_cleanup_complete", success=success)
+    except Exception as e:
+        logger.error("vector_cleanup_error", error=str(e))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
@@ -223,6 +249,15 @@ async def lifespan(app: FastAPI):
         trigger=IntervalTrigger(minutes=5),
         id="retry_failed_emails",
         name="Retry failed email sends",
+        replace_existing=True,
+    )
+
+    # Add vector store cleanup job (weekly)
+    scheduler.add_job(
+        cleanup_vector_store,
+        trigger=IntervalTrigger(days=7),
+        id="vector_store_cleanup",
+        name="Cleanup old vectors",
         replace_existing=True,
     )
 

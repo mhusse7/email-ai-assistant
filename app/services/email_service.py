@@ -40,7 +40,7 @@ class EmailService:
     def __init__(self):
         self.settings = get_settings()
         self.h2t = html2text.HTML2Text()
-        self.h2t.ignore_links = True
+        self.h2t.ignore_links = False
         self.h2t.ignore_images = True
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10))
@@ -49,7 +49,7 @@ class EmailService:
         emails = []
 
         try:
-            with IMAPClient(self.settings.imap_host, port=self.settings.imap_port, ssl=True) as client:
+            with IMAPClient(self.settings.imap_host, port=self.settings.imap_port, ssl=True, timeout=30) as client:
                 client.login(self.settings.imap_user, self.settings.imap_password)
                 client.select_folder("INBOX")
 

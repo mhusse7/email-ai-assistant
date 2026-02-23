@@ -213,6 +213,54 @@ class VectorService:
             logger.error("stats_error", error=str(e))
             return {}
 
+    def cleanup_old_vectors(self, cutoff_date_iso: str) -> bool:
+        """
+        Delete vectors older than the specified cutoff date.
+        
+        Args:
+            cutoff_date_iso: ISO formatted date string to delete before
+            
+        Returns:
+            True if successful
+        """
+        try:
+            # First, check if collection is empty
+            stats = self.get_collection_stats()
+            if stats.get("points_count", 0) == 0:
+                logger.info("vector_cleanup_skipped_empty")
+                return True
+                
+            # Create a filter for dates less than cutoff
+            date_filter = models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="timestamp",
+                        range=models.DatetimeRange(
+                            lt=cutoff_date_iso
+                        ),
+                    )
+                ]
+            )
+
+            # In Qdrant, deleting by filter
+            operation_info = self.client.delete(
+                collection_name=self.settings.qdrant_collection,
+                points_selector=models.FilterSelector(
+                    filter=date_filter
+                )
+            )
+            
+            logger.info(
+                "vectors_cleaned_up", 
+                cutoff=cutoff_date_iso, 
+                status=operation_info.status.value
+            )
+            return True
+
+        except Exception as e:
+            logger.error("vector_cleanup_error", error=str(e))
+            return False
+
     def check_connection(self) -> bool:
         """Check if Qdrant connection is healthy."""
         try:

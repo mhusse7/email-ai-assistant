@@ -174,9 +174,26 @@ class AIService:
                         content_type=attachment.content_type,
                     )
 
-            # Create chat session with history
+            # Create chat session with history, ensuring we don't exceed reasonable limits
+            # Gemini 2.5 flash has a massive 1M token window, but for cost/latency, we limit the injected history text
             chat_history = []
-            for msg in history:
+            
+            # Truncate history to roughly 30k characters max (~7-8k tokens) to prevent runaway context scaling
+            max_history_chars = 30000 
+            current_chars = 0
+            
+            # Add messages from newest to oldest up to limit, then reverse back
+            recent_msgs = []
+            for msg in reversed(history):
+                msg_len = len(msg["content"])
+                if current_chars + msg_len > max_history_chars and recent_msgs:
+                    logger.info("history_truncated", total_messages=len(history), included=len(recent_msgs))
+                    break
+                recent_msgs.append(msg)
+                current_chars += msg_len
+                
+            # Re-reverse to chronological order for Gemini
+            for msg in reversed(recent_msgs):
                 role = "user" if msg["role"] == "user" else "model"
                 chat_history.append({"role": role, "parts": [msg["content"]]})
 

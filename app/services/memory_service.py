@@ -64,8 +64,9 @@ class MemoryService:
         self.engine = create_engine(
             self.settings.postgres_url,
             poolclass=QueuePool,
-            pool_size=5,
-            max_overflow=10,
+            pool_size=20,
+            max_overflow=40,
+            pool_timeout=30,
             pool_pre_ping=True,
         )
         self.Session = sessionmaker(bind=self.engine)
@@ -268,7 +269,10 @@ class MemoryService:
                         FailedEmail.resolved == False,
                         FailedEmail.retry_count < max_retries
                     )
-                    .order_by(FailedEmail.created_at.asc())
+                    .order_by(
+                        FailedEmail.retry_count.asc(),
+                        FailedEmail.created_at.asc()
+                    )
                     .limit(limit)
                     .all()
                 )
