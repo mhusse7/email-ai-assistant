@@ -17,6 +17,7 @@ from app.services.email_service import EmailService
 from app.services.search_service import SearchService
 from app.services.memory_service import MemoryService
 from app.services.vector_service import VectorService
+from app.services.notion_service import NotionService
 from app.services.ai_service import AIService
 from app.utils.logger import setup_logging, get_logger
 
@@ -227,10 +228,12 @@ async def lifespan(app: FastAPI):
     search_service = SearchService()
     memory_service = MemoryService()
     vector_service = VectorService()
+    notion_service = NotionService()  # New service
     ai_service = AIService(
         search_service=search_service,
         memory_service=memory_service,
         vector_service=vector_service,
+        notion_service=notion_service,
     )
 
     # Setup scheduler for email polling

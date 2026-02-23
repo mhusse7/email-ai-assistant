@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     # SerpAPI
     serpapi_key: str
 
+    # Notion
+    notion_api_key: str = Field(default="")
+    notion_database_id: str = Field(default="")
+
     # PostgreSQL
     postgres_host: str = Field(default="postgres")
     postgres_port: int = Field(default=5432)

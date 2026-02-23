@@ -33,3 +33,4 @@ tenacity>=8.2.0
 structlog>=24.1.0
 bleach>=6.1.0
 html2text>=2024.2.0
+notion-client==2.2.1

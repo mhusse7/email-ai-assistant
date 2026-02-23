@@ -8,6 +8,7 @@ from app.models.email import EmailMessage
 from app.services.search_service import SearchService
 from app.services.memory_service import MemoryService
 from app.services.vector_service import VectorService
+from app.services.notion_service import NotionService
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -25,6 +26,7 @@ SYSTEM_PROMPT = """You are Moe's highly capable personal AI assistant responding
 3. Remember past conversations with this user
 4. Search past email conversations for relevant context
 5. Analyze images and screenshots sent via email
+6. Create tasks and notes in Notion to keep Moe organized
 
 ## Response Guidelines
 - START with the direct answer - no preamble like "Great question!" or "Sure, I'd be happy to help"
@@ -36,7 +38,7 @@ SYSTEM_PROMPT = """You are Moe's highly capable personal AI assistant responding
 ## When to Use Tools
 - Web Search: Current events, weather, prices, news, sports scores, stock prices, anything time-sensitive
 - Past Conversations: When user references previous discussions or you need context
-- Always search rather than guess for factual, time-sensitive information
+- Notion Tasks: Whenever Moe asks you to "remember this for later", "add this to my to-do list", or if there is a clear actionable item in the email that Moe needs to track. Use it proactively if you notice a clear task.
 
 ## Image Analysis
 - When images are attached, analyze them thoroughly
@@ -52,7 +54,7 @@ SYSTEM_PROMPT = """You are Moe's highly capable personal AI assistant responding
 
 ## Before responding:
 1. Identify what the user is really asking
-2. Determine if you need to search the web or past conversations
+2. Determine if you need to search the web, past conversations, or create a task
 3. Gather all relevant information
 4. Formulate a clear, complete answer
 5. Review for accuracy and clarity
@@ -76,11 +78,13 @@ class AIService:
         search_service: SearchService,
         memory_service: MemoryService,
         vector_service: VectorService,
+        notion_service: Optional[NotionService] = None,
     ):
         self.settings = get_settings()
         self.search_service = search_service
         self.memory_service = memory_service
         self.vector_service = vector_service
+        self.notion_service = notion_service
 
         # Configure Gemini
         genai.configure(api_key=self.settings.gemini_api_key)
@@ -115,6 +119,28 @@ class AIService:
                                 )
                             },
                             required=["query"],
+                        ),
+                    ),
+                    genai.protos.FunctionDeclaration(
+                        name="create_notion_task",
+                        description="Create a task or actionable item in Moe's Notion database. Use this when asked to 'remember to do X' or 'add Y to my list', or when encountering action items.",
+                        parameters=genai.protos.Schema(
+                            type=genai.protos.Type.OBJECT,
+                            properties={
+                                "title": genai.protos.Schema(
+                                    type=genai.protos.Type.STRING,
+                                    description="The name or title of the task",
+                                ),
+                                "priority": genai.protos.Schema(
+                                    type=genai.protos.Type.STRING,
+                                    description="Priority of the task: 'High', 'Medium', or 'Low'",
+                                ),
+                                "status": genai.protos.Schema(
+                                    type=genai.protos.Type.STRING,
+                                    description="Status of the task: 'To Do', 'In Progress', or 'Done'",
+                                )
+                            },
+                            required=["title"],
                         ),
                     ),
                 ]
@@ -309,6 +335,29 @@ class AIService:
                     sender_filter=session_id,
                 )
                 return self.vector_service.format_search_results(results)
+
+            elif function_name == "create_notion_task":
+                title = args.get("title", "New Task")
+                priority = args.get("priority", "Medium")
+                status = args.get("status", "To Do")
+                
+                logger.info("executing_create_notion_task", title=title, priority=priority)
+                
+                if not self.notion_service or not self.notion_service.is_enabled():
+                    return "Notion integration is not configured or enabled."
+                    
+                # We can try to extract the original email subject using session history context, but we will keep it simple for now
+                success = await self.notion_service.create_task(
+                    title=title,
+                    priority=priority,
+                    status=status,
+                    source_email_subject=f"Email thread with {session_id}"
+                )
+                
+                if success:
+                    return f"Successfully created task '{title}' in Notion with priority '{priority}'."
+                else:
+                    return "Failed to create task in Notion."
 
             else:
                 logger.warning("unknown_function", name=function_name)
