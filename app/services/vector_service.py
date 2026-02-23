@@ -7,6 +7,9 @@ from qdrant_client import QdrantClient
 from qdrant_client.http import models
 from qdrant_client.http.models import Distance, VectorParams, PointStruct
 import uuid
+import warnings
+
+warnings.filterwarnings("ignore", category=FutureWarning, module="google.generativeai")
 
 from app.config import get_settings
 from app.models.email import EmailConversation
@@ -62,7 +65,7 @@ class VectorService:
         """Generate embedding for text using Gemini."""
         try:
             result = genai.embed_content(
-                model="models/text-embedding-004",
+                model="models/embedding-001",
                 content=text,
                 task_type="retrieval_document",
             )
@@ -75,7 +78,7 @@ class VectorService:
         """Generate embedding for query using Gemini."""
         try:
             result = genai.embed_content(
-                model="models/text-embedding-004",
+                model="models/embedding-001",
                 content=text,
                 task_type="retrieval_query",
             )

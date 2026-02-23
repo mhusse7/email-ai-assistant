@@ -137,7 +137,7 @@ class AIService:
                                 ),
                                 "status": genai.protos.Schema(
                                     type=genai.protos.Type.STRING,
-                                    description="Status of the task: 'To Do', 'In Progress', or 'Done'",
+                                    description="Status of the task: 'Not started', 'In progress', or 'Done'",
                                 )
                             },
                             required=["title"],
@@ -339,7 +339,7 @@ class AIService:
             elif function_name == "create_notion_task":
                 title = args.get("title", "New Task")
                 priority = args.get("priority", "Medium")
-                status = args.get("status", "To Do")
+                status = args.get("status", "Not started")
                 
                 logger.info("executing_create_notion_task", title=title, priority=priority)
                 
