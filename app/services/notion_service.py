@@ -33,7 +33,7 @@ class NotionService:
     async def create_task(
         self,
         title: str,
-        status: str = "To Do",
+        status: str = "Not started",
         priority: str = "Medium",
         source_email_subject: Optional[str] = None,
     ) -> bool:
@@ -67,9 +67,6 @@ class NotionService:
                 },
                 "Priority": {
                     "select": {"name": priority}
-                },
-                "Date Added": {
-                    "date": {"start": datetime.utcnow().isoformat()}
                 }
             }
 
