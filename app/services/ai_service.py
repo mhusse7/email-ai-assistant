@@ -9,6 +9,7 @@ from app.services.search_service import SearchService
 from app.services.memory_service import MemoryService
 from app.services.vector_service import VectorService
 from app.services.notion_service import NotionService
+from app.services.web_service import WebReaderService
 from app.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -37,6 +38,7 @@ SYSTEM_PROMPT = """You are Moe's highly capable personal AI assistant responding
 
 ## When to Use Tools
 - Web Search: Current events, weather, prices, news, sports scores, stock prices, anything time-sensitive
+- Read URL Content: When the user shares a specific link (URL) and asks you to read, summarize, or discuss it. ALWAYS prefer this over web_search when a specific URL is provided.
 - Past Conversations: When user references previous discussions or you need context
 - Notion Tasks: Whenever Moe asks you to "remember this for later", "add this to my to-do list", or if there is a clear actionable item in the email that Moe needs to track. Use it proactively if you notice a clear task.
 
@@ -79,12 +81,14 @@ class AIService:
         memory_service: MemoryService,
         vector_service: VectorService,
         notion_service: Optional[NotionService] = None,
+        web_reader_service: Optional[WebReaderService] = None,
     ):
         self.settings = get_settings()
         self.search_service = search_service
         self.memory_service = memory_service
         self.vector_service = vector_service
         self.notion_service = notion_service
+        self.web_reader_service = web_reader_service or WebReaderService()
 
         # Configure Gemini
         genai.configure(api_key=self.settings.gemini_api_key)
@@ -141,6 +145,20 @@ class AIService:
                                 )
                             },
                             required=["title"],
+                        ),
+                    ),
+                    genai.protos.FunctionDeclaration(
+                        name="read_url_content",
+                        description="Fetch and read the full text content of a specific web URL or webpage. Use this when a user shares a link and asks you to read it, summarize it, or answer questions about the linked page.",
+                        parameters=genai.protos.Schema(
+                            type=genai.protos.Type.OBJECT,
+                            properties={
+                                "url": genai.protos.Schema(
+                                    type=genai.protos.Type.STRING,
+                                    description="The full URL to fetch and read (must start with http:// or https://)",
+                                )
+                            },
+                            required=["url"],
                         ),
                     ),
                 ]
@@ -358,6 +376,11 @@ class AIService:
                     return f"Successfully created task '{title}' in Notion with priority '{priority}'."
                 else:
                     return "Failed to create task in Notion."
+
+            elif function_name == "read_url_content":
+                url = args.get("url", "")
+                logger.info("executing_read_url", url=url[:120])
+                return await self.web_reader_service.read_url(url)
 
             else:
                 logger.warning("unknown_function", name=function_name)
