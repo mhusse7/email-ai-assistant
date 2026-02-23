@@ -65,9 +65,10 @@ class VectorService:
         """Generate embedding for text using Gemini."""
         try:
             result = genai.embed_content(
-                model="models/embedding-001",
+                model="models/gemini-embedding-001",
                 content=text,
                 task_type="retrieval_document",
+                output_dimensionality=EMBEDDING_DIMENSION,
             )
             return result["embedding"]
         except Exception as e:
@@ -78,9 +79,10 @@ class VectorService:
         """Generate embedding for query using Gemini."""
         try:
             result = genai.embed_content(
-                model="models/embedding-001",
+                model="models/gemini-embedding-001",
                 content=text,
                 task_type="retrieval_query",
+                output_dimensionality=EMBEDDING_DIMENSION,
             )
             return result["embedding"]
         except Exception as e:
